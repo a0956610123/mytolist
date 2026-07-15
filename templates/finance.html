@@ -1,0 +1,372 @@
+{% extends "layout.html" %}
+{% block title %}收支查询{% endblock %}
+{% block header %}<i class="bi bi-wallet2 me-2"></i>收支查询{% endblock %}
+{% block extra_css %}
+<style>
+    .summary-card {
+        border-left: 4px solid;
+        transition: all .15s;
+    }
+    .summary-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+    }
+    .summary-card.income { border-left-color: var(--success); }
+    .summary-card.expense { border-left-color: var(--danger); }
+    .summary-card.balance { border-left-color: var(--primary); }
+    .summary-card .num {
+        font-size: 1.5rem;
+        font-weight: 700;
+    }
+    .category-icon {
+        width: 36px;
+        height: 36px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        font-size: 1rem;
+    }
+    .category-icon.income { background: #d1fae5; color: #065f46; }
+    .category-icon.expense { background: #fee2e2; color: #991b1b; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set active_page = 'finance' %}
+
+<!-- 汇总卡片 -->
+<div class="row g-2 mb-3" id="summaryRow"></div>
+
+<!-- 操作栏 -->
+<div class="action-bar">
+    <div class="filter-bar">
+        <select class="form-select form-select-sm" id="filterType">
+            <option value="">全部类型</option>
+            <option value="income">收入</option>
+            <option value="expense">支出</option>
+        </select>
+        <select class="form-select form-select-sm" id="filterCategory">
+            <option value="">全部分类</option>
+        </select>
+        <input type="date" class="form-control form-control-sm" id="filterStartDate">
+        <span class="text-muted small">至</span>
+        <input type="date" class="form-control form-control-sm" id="filterEndDate">
+        <button class="btn btn-outline-primary btn-sm" onclick="loadTransactions()"><i class="bi bi-search"></i> 查询</button>
+        <button class="btn btn-outline-secondary btn-sm" onclick="resetFilters()">重置</button>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()">
+        <i class="bi bi-plus-lg"></i> 新增记录
+    </button>
+</div>
+
+<!-- 列表 -->
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0" id="txTable">
+            <thead class="table-light">
+                <tr>
+                    <th style="width:60px">类型</th>
+                    <th style="width:80px">分类</th>
+                    <th style="width:120px">金额</th>
+                    <th>描述</th>
+                    <th style="width:110px">日期</th>
+                    <th style="width:100px">操作</th>
+                </tr>
+            </thead>
+            <tbody id="txBody">
+                <tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增/编辑模态框 -->
+<div class="modal fade" id="txModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title" id="txModalTitle">新增记录</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="txForm">
+                    <input type="hidden" id="editTxId" value="">
+                    <div class="mb-3">
+                        <label class="form-label">类型 <span class="text-danger">*</span></label>
+                        <select class="form-select" id="txType" onchange="loadCategoryOptions()">
+                            <option value="expense">支出</option>
+                            <option value="income">收入</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">分类 <span class="text-danger">*</span></label>
+                        <select class="form-select" id="txCategory"></select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">金额 <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <span class="input-group-text">¥</span>
+                            <input type="number" class="form-control" id="txAmount" step="0.01" min="0.01" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">日期 <span class="text-danger">*</span></label>
+                        <input type="date" class="form-control" id="txDate" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">描述</label>
+                        <textarea class="form-control" id="txDesc" rows="2"></textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button class="btn btn-primary" onclick="saveTx()">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var txModal = null;
+var categoriesMap = {};
+
+$(function () {
+    txModal = new bootstrap.Modal(document.getElementById('txModal'));
+
+    // 设置默认日期范围（本月）
+    var mr = getMonthRange(0);
+    $('#filterStartDate').val(mr.start);
+    $('#filterEndDate').val(mr.end);
+
+    loadCategories();
+    loadTransactions();
+});
+
+function loadCategories() {
+    $.get('/api/finance/categories', function (res) {
+        if (res.code === 0) {
+            categoriesMap = {};
+            res.data.forEach(function (c) { categoriesMap[c.id] = c; });
+
+            // 填充筛选下拉
+            var sel = $('#filterCategory');
+            sel.html('<option value="">全部分类</option>');
+            renderCategoryOptions(res.data, sel);
+        }
+    });
+}
+
+function renderCategoryOptions(categories, selectEl) {
+    categories.forEach(function (c) {
+        var label = (c.type === 'income' ? '📈 ' : '📉 ') + c.name;
+        selectEl.append('<option value="' + c.id + '">' + label + '</option>');
+    });
+}
+
+function loadCategoryOptions() {
+    var type = $('#txType').val();
+    var sel = $('#txCategory');
+    sel.html('<option value="">加载中...</option>');
+
+    $.get('/api/finance/categories?type=' + type, function (res) {
+        if (res.code === 0) {
+            sel.html('');
+            res.data.forEach(function (c) {
+                sel.append('<option value="' + c.id + '">' + c.name + '</option>');
+            });
+        }
+    });
+}
+
+function loadTransactions() {
+    var params = {
+        type: $('#filterType').val(),
+        category_id: $('#filterCategory').val(),
+        start_date: $('#filterStartDate').val(),
+        end_date: $('#filterEndDate').val(),
+        sort: 'transaction_date',
+        order: 'desc'
+    };
+
+    $.ajax({
+        url: '/api/finance/list',
+        data: params,
+        dataType: 'json',
+        beforeSend: function () { showLoading(true); },
+        complete: function () { showLoading(false); },
+        success: function (res) {
+            if (res.code === 0) {
+                renderTransactions(res.data);
+                loadSummary();
+            } else {
+                showToast(res.msg, 'error');
+            }
+        },
+        error: function () {
+            showToast('加载失败', 'error');
+            showLoading(false);
+        }
+    });
+}
+
+function renderTransactions(list) {
+    var tbody = $('#txBody');
+    if (!list || list.length === 0) {
+        tbody.html('<tr><td colspan="6" class="text-center py-4"><div class="empty-state"><i class="bi bi-receipt"></i><p class="mb-0">暂无收支记录</p></div></td></tr>');
+        return;
+    }
+    var html = '';
+    list.forEach(function (tx) {
+        var cat = categoriesMap[tx.category_id] || {};
+        var typeLabel = tx.type === 'income' ? '<span class="badge badge-income">收入</span>' : '<span class="badge badge-expense">支出</span>';
+        var amountClass = tx.type === 'income' ? 'amount-income' : 'amount-expense';
+        var amountStr = (tx.type === 'income' ? '+' : '-') + '¥' + parseFloat(tx.amount).toFixed(2);
+        var iconClass = cat.icon || 'bi-tag';
+        var iconBg = tx.type === 'income' ? 'income' : 'expense';
+
+        html += '<tr>' +
+            '<td>' + typeLabel + '</td>' +
+            '<td><div class="d-flex align-items-center"><div class="category-icon ' + iconBg + ' me-2"><i class="' + iconClass + '"></i></div><span>' + (cat.name || '-') + '</span></div></td>' +
+            '<td class="' + amountClass + '">' + amountStr + '</td>' +
+            '<td class="text-muted small">' + $('<span>').text(tx.description || '-').html() + '</td>' +
+            '<td class="small">' + formatDateDisplay(tx.transaction_date) + '</td>' +
+            '<td>' +
+            '<button class="btn btn-outline-secondary btn-sm me-1" onclick="openEditModal(' + tx.id + ')" title="编辑"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-outline-danger btn-sm" onclick="deleteTx(' + tx.id + ')" title="删除"><i class="bi bi-trash"></i></button>' +
+            '</td></tr>';
+    });
+    tbody.html(html);
+}
+
+function loadSummary() {
+    var start = $('#filterStartDate').val();
+    var end = $('#filterEndDate').val();
+    if (!start || !end) return;
+
+    $.get('/api/finance/summary', { start_date: start, end_date: end }, function (res) {
+        if (res.code === 0 && res.data) {
+            var d = res.data;
+            var html = '' +
+                '<div class="col-md-4 col-6"><div class="card summary-card income p-3"><small class="text-muted">总收入</small><div class="num text-success">¥' + parseFloat(d.total_income).toFixed(2) + '</div></div></div>' +
+                '<div class="col-md-4 col-6"><div class="card summary-card expense p-3"><small class="text-muted">总支出</small><div class="num text-danger">¥' + parseFloat(d.total_expense).toFixed(2) + '</div></div></div>' +
+                '<div class="col-md-4 col-6"><div class="card summary-card balance p-3"><small class="text-muted">结余</small><div class="num text-primary">¥' + parseFloat(d.balance).toFixed(2) + '</div></div></div>';
+
+            // 分类汇总（Top 5）
+            if (d.by_category && d.by_category.length > 0) {
+                var top = d.by_category.filter(function (c) { return parseFloat(c.total) > 0; }).slice(0, 5);
+                if (top.length > 0) {
+                    html += '<div class="col-12"><div class="card p-3"><small class="text-muted mb-2">分类排行</small>';
+                    top.forEach(function (c) {
+                        var bg = c.type === 'income' ? 'bg-success-subtle' : 'bg-danger-subtle';
+                        var color = c.type === 'income' ? 'text-success' : 'text-danger';
+                        html += '<div class="d-flex justify-content-between align-items-center mb-1"><span><span class="badge ' + bg + ' me-1"><i class="' + (c.icon || 'bi-tag') + '"></i></span> ' + c.category_name + '</span><span class="' + color + ' fw-medium">¥' + parseFloat(c.total).toFixed(2) + '</span></div>';
+                    });
+                    html += '</div></div>';
+                }
+            }
+
+            $('#summaryRow').html(html);
+        }
+    });
+}
+
+function resetFilters() {
+    $('#filterType').val('');
+    $('#filterCategory').val('');
+    var mr = getMonthRange(0);
+    $('#filterStartDate').val(mr.start);
+    $('#filterEndDate').val(mr.end);
+    loadTransactions();
+}
+
+function openAddModal() {
+    $('#editTxId').val('');
+    $('#txModalTitle').text('新增收支记录');
+    $('#txForm')[0].reset();
+    $('#txType').val('expense');
+    $('#txDate').val(formatDateLocal(new Date()));
+    loadCategoryOptions();
+    txModal.show();
+}
+
+function openEditModal(id) {
+    var tx = null;
+    $.ajax({
+        url: '/api/finance/list?sort=id&order=asc',
+        method: 'GET',
+        dataType: 'json',
+        async: false,
+        success: function (res) {
+            if (res.code === 0) {
+                tx = res.data.find(function (t) { return t.id === id; });
+            }
+        }
+    });
+
+    if (!tx) {
+        showToast('未找到记录', 'error');
+        return;
+    }
+
+    $('#editTxId').val(tx.id);
+    $('#txModalTitle').text('编辑收支记录');
+    $('#txType').val(tx.type);
+    loadCategoryOptions();
+    setTimeout(function () {
+        $('#txCategory').val(tx.category_id);
+    }, 200);
+    $('#txAmount').val(tx.amount);
+    $('#txDate').val(tx.transaction_date);
+    $('#txDesc').val(tx.description || '');
+    txModal.show();
+}
+
+function saveTx() {
+    var type = $('#txType').val();
+    var categoryId = $('#txCategory').val();
+    var amount = $('#txAmount').val();
+    var date = $('#txDate').val();
+    var desc = $('#txDesc').val().trim();
+
+    if (!categoryId) { showToast('请选择分类', 'warning'); return; }
+    if (!amount || parseFloat(amount) <= 0) { showToast('请输入有效金额', 'warning'); return; }
+    if (!date) { showToast('请选择日期', 'warning'); return; }
+
+    var data = {
+        type: type,
+        category_id: parseInt(categoryId),
+        amount: parseFloat(amount),
+        transaction_date: date,
+        description: desc
+    };
+
+    var id = $('#editTxId').val();
+    if (id) {
+        apiRequest('PUT', '/api/finance/update/' + id, data, function () {
+            showToast('更新成功');
+            txModal.hide();
+            loadTransactions();
+        });
+    } else {
+        apiRequest('POST', '/api/finance/add', data, function () {
+            showToast('新增成功');
+            txModal.hide();
+            loadTransactions();
+        });
+    }
+}
+
+function deleteTx(id) {
+    confirmDialog('确定要删除这条记录吗？', function () {
+        apiRequest('DELETE', '/api/finance/delete/' + id, null, function () {
+            showToast('删除成功');
+            loadTransactions();
+        });
+    });
+}
+</script>
+{% endblock %}

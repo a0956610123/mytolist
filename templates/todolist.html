@@ -1,0 +1,313 @@
+{% extends "layout.html" %}
+{% block title %}待办事项{% endblock %}
+{% block header %}<i class="bi bi-list-check me-2"></i>待办事项{% endblock %}
+{% block extra_css %}
+<style>
+    .todo-item {
+        transition: all .15s;
+    }
+    .todo-item:hover {
+        background: var(--gray-50);
+    }
+    .todo-item.completed .todo-title {
+        text-decoration: line-through;
+        color: var(--gray-400);
+    }
+    .todo-check {
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+        accent-color: var(--success);
+    }
+    .search-box {
+        position: relative;
+    }
+    .search-box i {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--gray-400);
+    }
+    .search-box input {
+        padding-left: 32px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% set active_page = 'todolist' %}
+
+<!-- 操作栏 -->
+<div class="action-bar">
+    <div class="filter-bar">
+        <div class="search-box">
+            <i class="bi bi-search"></i>
+            <input type="text" class="form-control form-control-sm" id="searchKeyword" placeholder="搜索..." style="width:180px">
+        </div>
+        <select class="form-select form-select-sm" id="filterStatus">
+            <option value="">全部状态</option>
+            <option value="pending">待完成</option>
+            <option value="completed">已完成</option>
+        </select>
+        <select class="form-select form-select-sm" id="filterPriority">
+            <option value="">全部优先级</option>
+            <option value="high">高</option>
+            <option value="medium">中</option>
+            <option value="low">低</option>
+        </select>
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="openAddModal()">
+        <i class="bi bi-plus-lg"></i> 新增待办
+    </button>
+</div>
+
+<!-- 统计行 -->
+<div class="row g-2 mb-3" id="statsRow"></div>
+
+<!-- 列表 -->
+<div class="card">
+    <div class="card-body p-0">
+        <table class="table table-hover mb-0" id="todoTable">
+            <thead class="table-light">
+                <tr>
+                    <th style="width:40px"></th>
+                    <th>标题</th>
+                    <th style="width:80px">优先级</th>
+                    <th style="width:100px">截止日期</th>
+                    <th style="width:80px">状态</th>
+                    <th style="width:100px">操作</th>
+                </tr>
+            </thead>
+            <tbody id="todoBody">
+                <tr><td colspan="6" class="text-center text-muted py-4">加载中...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 新增/编辑模态框 -->
+<div class="modal fade" id="todoModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h6 class="modal-title" id="todoModalTitle">新增待办</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="todoForm">
+                    <input type="hidden" id="editId" value="">
+                    <div class="mb-3">
+                        <label class="form-label">标题 <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" id="todoTitle" maxlength="200" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">描述</label>
+                        <textarea class="form-control" id="todoDesc" rows="2"></textarea>
+                    </div>
+                    <div class="row mb-3">
+                        <div class="col-6">
+                            <label class="form-label">优先级</label>
+                            <select class="form-select" id="todoPriority">
+                                <option value="low">低</option>
+                                <option value="medium" selected>中</option>
+                                <option value="high">高</option>
+                            </select>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label">截止日期</label>
+                            <input type="date" class="form-control" id="todoDueDate">
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button class="btn btn-primary" onclick="saveTodo()">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var todoModal = null;
+
+$(function () {
+    todoModal = new bootstrap.Modal(document.getElementById('todoModal'));
+
+    loadTodos();
+
+    // 筛选事件
+    $('#filterStatus, #filterPriority').change(loadTodos);
+    var searchTimer = null;
+    $('#searchKeyword').on('input', function () {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(loadTodos, 300);
+    });
+});
+
+function loadTodos() {
+    var params = {
+        status: $('#filterStatus').val(),
+        priority: $('#filterPriority').val(),
+        keyword: $('#searchKeyword').val(),
+        sort: 'created_at',
+        order: 'desc'
+    };
+
+    $.ajax({
+        url: '/api/todolist/list',
+        data: params,
+        dataType: 'json',
+        beforeSend: function () { showLoading(true); },
+        complete: function () { showLoading(false); },
+        success: function (res) {
+            if (res.code === 0) {
+                renderTodos(res.data);
+                loadStats();
+            } else {
+                showToast(res.msg, 'error');
+            }
+        },
+        error: function () {
+            showToast('加载失败', 'error');
+            showLoading(false);
+        }
+    });
+}
+
+function renderTodos(list) {
+    var tbody = $('#todoBody');
+    if (!list || list.length === 0) {
+        tbody.html('<tr><td colspan="6" class="text-center py-4"><div class="empty-state"><i class="bi bi-inbox"></i><p class="mb-0">暂无待办事项</p></div></td></tr>');
+        return;
+    }
+    var html = '';
+    list.forEach(function (t) {
+        var priClass = t.priority === 'high' ? 'badge-high' : t.priority === 'medium' ? 'badge-medium' : 'badge-low';
+        var priLabel = t.priority === 'high' ? '高' : t.priority === 'medium' ? '中' : '低';
+        var checked = t.status === 'completed' ? 'checked' : '';
+        var rowClass = t.status === 'completed' ? 'completed' : '';
+        var statusBadge = t.status === 'completed'
+            ? '<span class="badge bg-success-subtle text-success">已完成</span>'
+            : '<span class="badge bg-warning-subtle text-warning">待完成</span>';
+
+        html += '<tr class="todo-item ' + rowClass + '">' +
+            '<td><input type="checkbox" class="todo-check" ' + checked + ' onchange="toggleTodo(' + t.id + ')"></td>' +
+            '<td><span class="todo-title fw-medium">' + $('<span>').text(t.title).html() + '</span></td>' +
+            '<td><span class="badge badge-priority ' + priClass + '">' + priLabel + '</span></td>' +
+            '<td class="text-muted small">' + formatDateDisplay(t.due_date) + '</td>' +
+            '<td>' + statusBadge + '</td>' +
+            '<td>' +
+            '<button class="btn btn-outline-secondary btn-sm me-1" onclick="openEditModal(' + t.id + ')" title="编辑"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-outline-danger btn-sm" onclick="deleteTodo(' + t.id + ')" title="删除"><i class="bi bi-trash"></i></button>' +
+            '</td></tr>';
+    });
+    tbody.html(html);
+}
+
+function loadStats() {
+    $.get('/api/todolist/stats', function (res) {
+        if (res.code === 0 && res.data) {
+            var d = res.data;
+            var html = '' +
+                '<div class="col-6 col-md-3"><div class="stat-card bg-primary"><div class="stat-label">总待办</div><div class="stat-value">' + d.total + '</div><i class="bi bi-list-check stat-icon"></i></div></div>' +
+                '<div class="col-6 col-md-3"><div class="stat-card bg-success"><div class="stat-label">已完成</div><div class="stat-value">' + d.completed + '</div><i class="bi bi-check-circle stat-icon"></i></div></div>' +
+                '<div class="col-6 col-md-3"><div class="stat-card bg-warning"><div class="stat-label">待完成</div><div class="stat-value">' + d.pending + '</div><i class="bi bi-clock stat-icon"></i></div></div>' +
+                '<div class="col-6 col-md-3"><div class="stat-card bg-info"><div class="stat-label">完成率</div><div class="stat-value">' + d.completion_rate + '%</div><i class="bi bi-pie-chart stat-icon"></i></div></div>';
+            $('#statsRow').html(html);
+        }
+    });
+}
+
+function openAddModal() {
+    $('#editId').val('');
+    $('#todoModalTitle').text('新增待办');
+    $('#todoForm')[0].reset();
+    $('#todoPriority').val('medium');
+    todoModal.show();
+}
+
+function openEditModal(id) {
+    // Find the todo in the current list (already loaded)
+    var todo = null;
+    try {
+        var allTodos = $('#todoBody').data('todos');
+    } catch(e) {}
+    // Fetch from API
+    $.ajax({
+        url: '/api/todolist/list?sort=id&order=asc',
+        method: 'GET',
+        dataType: 'json',
+        async: false,
+        success: function (res) {
+            if (res.code === 0) {
+                todo = res.data.find(function (t) { return t.id === id; });
+            }
+        }
+    });
+
+    if (!todo) {
+        showToast('未找到待办', 'error');
+        return;
+    }
+
+    $('#editId').val(todo.id);
+    $('#todoModalTitle').text('编辑待办');
+    $('#todoTitle').val(todo.title);
+    $('#todoDesc').val(todo.description || '');
+    $('#todoPriority').val(todo.priority);
+    $('#todoDueDate').val(todo.due_date || '');
+    todoModal.show();
+}
+
+function saveTodo() {
+    var title = $('#todoTitle').val().trim();
+    if (!title) {
+        showToast('请输入标题', 'warning');
+        return;
+    }
+
+    var data = {
+        title: title,
+        description: $('#todoDesc').val().trim(),
+        priority: $('#todoPriority').val(),
+        due_date: $('#todoDueDate').val() || null
+    };
+
+    var id = $('#editId').val();
+    if (id) {
+        // 更新
+        apiRequest('PUT', '/api/todolist/update/' + id, data, function () {
+            showToast('更新成功');
+            todoModal.hide();
+            loadTodos();
+        });
+    } else {
+        // 新增
+        apiRequest('POST', '/api/todolist/add', data, function () {
+            showToast('新增成功');
+            todoModal.hide();
+            loadTodos();
+        });
+    }
+}
+
+function toggleTodo(id) {
+    apiRequest('PUT', '/api/todolist/toggle/' + id, null, function (data) {
+        loadTodos();
+    });
+}
+
+function deleteTodo(id) {
+    confirmDialog('确定要删除这条待办吗？', function () {
+        apiRequest('DELETE', '/api/todolist/delete/' + id, null, function () {
+            showToast('删除成功');
+            loadTodos();
+        });
+    });
+}
+</script>
+{% endblock %}
